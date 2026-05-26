@@ -2,8 +2,6 @@
 
 > 一款基于纯前端 Canvas 实现的像素风格地牢探索游戏，支持手机/电脑双端游玩，支持双人联机协作模式。
 
-[![地牢游戏](https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=pixel+art+dungeon+crawler+game+with+hero+sword+monster+treasure+chest+dark+atmospheric&image_size=landscape_16_9)](k.html)
-
 ---
 
 ## 🎮 游戏特色
