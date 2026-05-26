@@ -968,7 +968,15 @@ resize(); window.addEventListener('resize', resize);
 
 /* ===== 输入控制 ===== */
 var keys = {};
-window.addEventListener('keydown', e => { keys[e.code]=true; if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].indexOf(e.code)!==-1) e.preventDefault(); });
+window.addEventListener('keydown', e => { 
+  keys[e.code]=true; 
+  if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].indexOf(e.code)!==-1) e.preventDefault(); 
+  // 按 T 键触发楼层遍历测试
+  if(e.code==='KeyT' && gs==='playing') {
+    console.log('🧪 快捷键触发: quickTravelAllFloors()');
+    quickTravelAllFloors();
+  }
+});
 window.addEventListener('keyup', e => keys[e.code]=false);
 
 var joy = {on:false, id:-1, bx:0, by:0, kx:0, ky:0, dx:0, dy:0};
@@ -1048,16 +1056,24 @@ function genMap(floor){
   var style = getMapStyle(floor);
   curMapStyle = style;
   var rawMap;
-  switch(style){
-    case 'maze': rawMap = genMazeMap(floor); break;
-    case 'cross': rawMap = genCrossMap(floor); break;
-    case 'spiral': rawMap = genSpiralMap(floor); break;
-    case 'cave': rawMap = genCaveMap(floor); break;
-    case 'arena': rawMap = genArenaMap(floor); break;
-    default: rawMap = genClassicMap(floor);
-  }
-  if (!rawMap.rooms || rawMap.rooms.length < 2) {
+  try {
+    switch(style){
+      case 'maze': rawMap = genMazeMap(floor); break;
+      case 'cross': rawMap = genCrossMap(floor); break;
+      case 'spiral': rawMap = genSpiralMap(floor); break;
+      case 'cave': rawMap = genCaveMap(floor); break;
+      case 'arena': rawMap = genArenaMap(floor); break;
+      default: rawMap = genClassicMap(floor);
+    }
+    if (!rawMap || !rawMap.tiles || !rawMap.rooms || rawMap.rooms.length === 0 || !rawMap.sr) {
+      throw new Error("生成的房间无效");
+    }
+  } catch(e) {
+    console.warn("地图生成降级: ", e);
     rawMap = genClassicMap(floor);
+    if (!rawMap || !rawMap.rooms || rawMap.rooms.length === 0) {
+      rawMap = genClassicMap(1);
+    }
   }
   return rawMap;
 }
@@ -1103,7 +1119,7 @@ function genCrossMap(floor){
     var ax=cx+a.dx-Math.floor(a.w/2), ay=cy+a.dy-Math.floor(a.h/2);
     ax=cl(ax,1,MW-a.w-1); ay=cl(ay,1,MH-a.h-1);
     rooms.push({x:ax,y:ay,w:a.w,h:a.h,cx:Math.floor(ax+a.w/2),cy:Math.floor(ay+a.h/2)});
-    for(var y=ay;y<ay+a.h;y++) for(var x=ax;x<x+a.w;x++) tiles[y][x]=1;
+    for(var y=ay;y<ay+a.h;y++) for(var x=ax;x<ax+a.w;x++) tiles[y][x]=1;
     var sx=cx, sy=cy, ex=rooms[rooms.length-1].cx, ey=rooms[rooms.length-1].cy;
     while(sx!==ex){if(sy>=0&&sy<MH&&sx>=0&&sx<MW)tiles[sy][sx]=1;sx+=sx<ex?1:-1;}
     while(sy!==ey){if(sy>=0&&sy<MH&&sx>=0&&sx<MW)tiles[sy][sx]=1;sy+=sy<ey?1:-1;}
@@ -1153,7 +1169,9 @@ function genSpiralMap(floor){
 function genCaveMap(floor){
   var tiles=[], rooms=[], decor=[];
   for(var y=0;y<MH;y++){tiles[y]=new Uint8Array(MW);}
-  for(var y=0;y<MH;y++) for(var x=0;x<MW;x++) tiles[y][x]=(Math.random()<.42)?0:1;
+  // 生成洞穴地形，增加可行走区域的概率
+  for(var y=0;y<MH;y++) for(var x=0;x<MW;x++) tiles[y][x]=(Math.random()<.45)?0:1;
+  // 细胞自动机平滑
   for(var p=0;p<4;p++){
     var nt=[]; for(var y=0;y<MH;y++){nt[y]=new Uint8Array(MW);}
     for(var y=1;y<MH-1;y++) for(var x=1;x<MW-1;x++){
@@ -1162,8 +1180,13 @@ function genCaveMap(floor){
       nt[y][x]=(cnt>=5)?0:1;
     } tiles=nt;
   }
+  // 确保边界是墙
+  for(var y=0;y<MH;y++){tiles[y][0]=0;tiles[y][MW-1]=0;}
+  for(var x=0;x<MW;x++){tiles[0][x]=0;tiles[MH-1][x]=0;}
+  
   var nr=cl(5+Math.floor(floor*.5),4,10);
-  for(var at=0;at<300&&rooms.length<nr;at++){
+  // 尝试放置房间
+  for(var at=0;at<500&&rooms.length<nr;at++){
     var rw=ri(4,7), rh=ri(4,6), rx=ri(2,MW-rw-2), ry=ri(2,MH-rh-2), ok=true;
     for(var j=0;j<rooms.length;j++){var r=rooms[j];if(rx<r.x+r.w+1&&rx+rw+1>r.x&&ry<r.y+r.h+1&&ry+rh+1>r.y){ok=false;break;}}
     if(!ok) continue;
@@ -1172,6 +1195,17 @@ function genCaveMap(floor){
     if(!canPlace) continue;
     rooms.push({x:rx,y:ry,w:rw,h:rh,cx:Math.floor(rx+rw/2),cy:Math.floor(ry+rh/2)});
     for(var y=ry;y<ry+rh;y++) for(var x=rx;x<rx+rw;x++) tiles[y][x]=1;
+  }
+  // 如果没有生成足够房间，强制创建一些
+  if(rooms.length<2){
+    console.warn('genCaveMap: 房间不足，强制创建备用房间');
+    var cx=Math.floor(MW/2), cy=Math.floor(MH/2);
+    // 创建中心房间
+    rooms.push({x:cx-3,y:cy-3,w:6,h:6,cx:cx,cy:cy});
+    for(var y=cy-3;y<cy+3;y++) for(var x=cx-3;x<cx+3;x++) if(y>=0&&y<MH&&x>=0&&x<MW) tiles[y][x]=1;
+    // 创建第二个房间
+    rooms.push({x:cx+5,y:cy+5,w:5,h:5,cx:cx+7,cy:cy+7});
+    for(var y=cy+5;y<cy+10;y++) for(var x=cx+5;x<cx+10;x++) if(y>=0&&y<MH&&x>=0&&x<MW) tiles[y][x]=1;
   }
   linkRooms(tiles,rooms);
   return finishMap(tiles,rooms,decor,floor);
@@ -1199,8 +1233,15 @@ function genArenaMap(floor){
     rooms.push({x:cr.x,y:cr.y,w:cr.w,h:cr.h,cx:Math.floor(cr.x+cr.w/2),cy:Math.floor(cr.y+cr.h/2)});
     for(var y=cr.y;y<cr.y+cr.h;y++) for(var x=cr.x;x<cr.x+cr.w;x++) tiles[y][x]=1;
   });
-  var sr=cornerRooms[0], str=cornerRooms[ri(2,3)];
-  tiles[str.cy][str.cx]=2;
+  var sr=rooms[1], str=rooms[ri(3,4)];
+  // 安全检查
+  if (!str || typeof str.cy !== 'number' || typeof str.cx !== 'number') {
+    str = rooms[rooms.length-1] || rooms[0];
+  }
+  if (str && typeof str.cy === 'number' && typeof str.cx === 'number' &&
+      str.cy >= 0 && str.cy < MH && str.cx >= 0 && str.cx < MW) {
+    tiles[str.cy][str.cx]=2;
+  }
   return {tiles:tiles, rooms:rooms, decor:decor, sr:sr, str:str};
 }
 function linkRooms(tiles,rooms){
@@ -1238,7 +1279,17 @@ function finishMap(tiles,rooms,decor,floor){
   }
   var sr=rooms[0], md=0, str=rooms[rooms.length-1];
   for(var j=0;j<rooms.length;j++){ var d2=Math.abs(rooms[j].cx-sr.cx)+Math.abs(rooms[j].cy-sr.cy); if(d2>md){md=d2;str=rooms[j];} }
-  tiles[str.cy][str.cx]=2;
+  // 安全检查：确保 str 和坐标有效
+  if (!str || typeof str.cy !== 'number' || typeof str.cx !== 'number') {
+    console.warn('finishMap: str 无效，使用备用值', str);
+    str = rooms[rooms.length-1] || rooms[0];
+  }
+  if (str && typeof str.cy === 'number' && typeof str.cx === 'number' && 
+      str.cy >= 0 && str.cy < MH && str.cx >= 0 && str.cx < MW) {
+    tiles[str.cy][str.cx]=2;
+  } else {
+    console.error('finishMap: 无法设置楼梯位置', str);
+  }
   for(var j=0;j<rooms.length;j++){
     var r=rooms[j], cnt=ri(1,Math.floor(r.w*r.h/10));
     for(var k=0;k<cnt;k++){
@@ -2580,9 +2631,13 @@ function plMons(rooms,sr2,str2,floor){
     }
   }
   if(floor===5||floor===10){
-    var boss=crMon('boss',str2.cx*T,str2.cy*T,floor);
-    if(floor===10){boss.hp=Math.ceil(boss.hp*2); boss.mhp=boss.hp;}
-    mons.push(boss);
+    if(str2 && typeof str2.cx === 'number' && typeof str2.cy === 'number') {
+      var boss=crMon('boss',str2.cx*T,str2.cy*T,floor);
+      if(floor===10){boss.hp=Math.ceil(boss.hp*2); boss.mhp=boss.hp;}
+      mons.push(boss);
+    } else {
+      console.warn("plMons: str2 坐标无效，跳过 BOSS 生成", str2);
+    }
   }
 }
 
@@ -3077,27 +3132,71 @@ function drTouch(){
 /* ===== 游戏流程 ===== */
 var gs='start', cMap=null, cam={x:0,y:0}, gs_paused=false, curMapStyle='classic';
 var MAP_NAMES = {classic:'🏰 古堡', maze:'🌀 迷宫', cross:'✝ 十字殿', spiral:'🐚 螺旋', cave:'🕳️ 洞窟', arena:'⚔ 竞技场'};
+var chkLock = false;
 
 function initFl(floor){
   try {
-    cMap=genMap(floor);
-    if (!cMap || !cMap.tiles || !cMap.sr) {
-      console.warn('地图生成失败，使用经典地图');
+    cMap = genMap(floor);
+    if (!cMap || !cMap.tiles || !cMap.rooms || cMap.rooms.length === 0 || !cMap.sr) {
+      console.warn("initFl 检测到无效地图，强制使用经典地图");
       cMap = genClassicMap(floor);
     }
-    var sr2=cMap.sr;
-    P.x=sr2.cx*T; P.y=sr2.cy*T; P.fl=floor; P.atkg=false; P.atkt=0;
-    drps=[]; pts=[]; fts=[]; projs=[];
-    plMons(cMap.rooms,sr2,cMap.str,floor); plChts(cMap.rooms,sr2,cMap.str,floor);
-    cam.x=P.x+T/2-W/2; cam.y=P.y+T/2-H/2;
+    if (!cMap.str) {
+      cMap.str = cMap.rooms[cMap.rooms.length - 1];
+    }
+    var sr2 = cMap.sr;
+    var startX = sr2.cx * T;
+    var startY = sr2.cy * T;
+    if (startX < 0 || startX >= MW*T || startY < 0 || startY >= MH*T) {
+      startX = T*2; startY = T*2;
+    }
+    P.x = startX; P.y = startY;
+    P.fl = floor;
+    P.atkg = false;
+    P.atkt = 0;
+    P.atkAb = null;
+    P.atkHit = [];
+    P.invt = 0;
+    P.spdBoost = 0;
+    P.atkBoost = 0;
+    P.shield = 0;
+    P.shieldT = 0;
+    drps = [];
+    pts = [];
+    fts = [];
+    projs = [];
+
+    plMons(cMap.rooms, sr2, cMap.str, floor);
+    plChts(cMap.rooms, sr2, cMap.str, floor);
+
+    if (isW(P.x, P.y, 1, cMap)) {
+      console.warn("玩家起始位置卡墙，尝试修正");
+      for (var dy = -2; dy <= 2; dy++) {
+        for (var dx = -2; dx <= 2; dx++) {
+          var tx = P.x + dx*T, ty = P.y + dy*T;
+          if (!isW(tx, ty, 1, cMap)) {
+            P.x = tx; P.y = ty;
+            break;
+          }
+        }
+      }
+    }
+
+    cam.x = P.x + T/2 - W/2;
+    cam.y = P.y + T/2 - H/2;
+    cam.x = cl(cam.x, 0, MW*T - W);
+    cam.y = cl(cam.y, 0, MH*T - H);
   } catch(e) {
-    console.error('initFl 错误:', e);
+    console.error("initFl 致命错误，再次尝试经典地图", e);
     cMap = genClassicMap(1);
-    var sr2=cMap.sr;
-    P.x=sr2.cx*T; P.y=sr2.cy*T; P.fl=floor||1; P.atkg=false; P.atkt=0;
-    drps=[]; pts=[]; fts=[]; projs=[];
-    plMons(cMap.rooms,sr2,cMap.str,floor); plChts(cMap.rooms,sr2,cMap.str,floor);
-    cam.x=P.x+T/2-W/2; cam.y=P.y+T/2-H/2;
+    P.x = cMap.sr.cx * T;
+    P.y = cMap.sr.cy * T;
+    P.fl = floor || 1;
+    drps = []; pts = []; fts = []; projs = [];
+    plMons(cMap.rooms, cMap.sr, cMap.str, floor);
+    plChts(cMap.rooms, cMap.sr, cMap.str, floor);
+    cam.x = P.x + T/2 - W/2;
+    cam.y = P.y + T/2 - H/2;
   }
 }
 
@@ -3108,8 +3207,10 @@ function startG(){
 }
 
 function chkCol(){
+  if (chkLock) return;
   var ptx=Math.floor((P.x+T/2)/T), pty=Math.floor((P.y+T/2)/T);
   if(ptx>=0&&ptx<MW&&pty>=0&&pty<MH&&cMap.tiles[pty][ptx]===2){
+    chkLock = true;
     if(P.fl>=MAX_F){
       gs='win'; document.getElementById('uib').classList.add('hid');
       document.getElementById('wsa').innerHTML='通过全部 '+MAX_F+' 层!<br>等级 '+P.lv+' | 击杀 '+P.kl+' | 金币 '+DB.gold;
@@ -3119,6 +3220,8 @@ function chkCol(){
       spPt(P.x+T/2,P.y+T/2,CC.sc,Math.ceil(25*PF),3,40); spFt(P.x+T/2,P.y-10,'进入第 '+(P.fl+1)+' 层',CC.sc,18);
       initFl(P.fl+1); saveData();
     }
+    setTimeout(() => { chkLock = false; }, 200);
+    return;
   }
   for(var i=0;i<chsts.length;i++){
     var c=chsts[i]; if(c.op) continue;
@@ -3232,7 +3335,13 @@ function loop(ts){
     }
     cx.globalAlpha=1;
   } else if(gs==='playing'){
-    if(!gs_paused){ upPl(dt,cMap); upMons(dt,cMap); upEn(dt,cMap); upCam(); }
+    if(!gs_paused){
+      if(!cMap || !cMap.tiles || !cMap.rooms) {
+        console.warn("检测到cMap损坏，自动重建第"+P.fl+"层");
+        initFl(P.fl);
+      }
+      upPl(dt,cMap); upMons(dt,cMap); upEn(dt,cMap); upCam();
+    }
     renderWorld();
   } else renderWorld();
   requestAnimationFrame(loop);
@@ -3296,6 +3405,90 @@ setTimeout(function(){
     console.log('⏳ 正在连接Firebase...');
   }
 }, 3000);
+
+/* ===== 快速测试：遍历楼层定位卡死问题 ===== */
+window.autoTestFloors = function() {
+  var totalOk = 0, totalFail = 0;
+  var originalGs = gs, originalCMap = cMap, originalP = P ? {x:P.x,y:P.y,fl:P.fl} : null;
+  console.log('========== 楼层地图生成测试开始 ==========');
+  for(var f = 1; f <= MAX_F; f++) {
+    var style = getMapStyle(f);
+    var result = null, err = null;
+    try {
+      result = genMap(f);
+      if (!result) throw new Error('genMap 返回 null');
+      if (!result.tiles) throw new Error('无 tiles');
+      if (!result.rooms || result.rooms.length === 0) throw new Error('rooms 为空');
+      if (!result.sr) throw new Error('无 sr (起点房间)');
+      if (typeof result.sr.cx !== 'number' || typeof result.sr.cy !== 'number') throw new Error('sr 缺少 cx/cy, sr='+JSON.stringify(result.sr));
+      if (!result.str) result.str = result.rooms[result.rooms.length - 1];
+      if (typeof result.str.cx !== 'number' || typeof result.str.cy !== 'number') throw new Error('str 缺少 cx/cy, str='+JSON.stringify(result.str));
+      if (result.tiles[result.str.cy] === undefined || result.tiles[result.str.cy][result.str.cx] === undefined) throw new Error('楼梯坐标越界');
+      if (result.tiles[result.str.cy][result.str.cx] !== 2) result.tiles[result.str.cy][result.str.cx] = 2;
+      if (result.sr.cx < 0 || result.sr.cx >= MW || result.sr.cy < 0 || result.sr.cy >= MH) throw new Error('sr 坐标越界');
+      if (result.sr.cx < 0 || result.sr.cx >= MW || result.sr.cy < 0 || result.sr.cy >= MH) throw new Error('sr 坐标越界');
+      console.log('  ✅ 第'+f+'层 ['+MAP_NAMES[style]+'] 房间数='+result.rooms.length+' sr=('+result.sr.cx+','+result.sr.cy+') str=('+result.str.cx+','+result.str.cy+')');
+      totalOk++;
+    } catch(e) {
+      console.error('  ❌ 第'+f+'层 ['+style+'] 失败: '+e.message);
+      totalFail++;
+    }
+  }
+  console.log('========== 测试完毕: 成功 '+totalOk+' / '+MAX_F+', 失败 '+totalFail+' ==========');
+  if (totalFail > 0) {
+    console.warn('⚠️ 发现 '+totalFail+' 个有问题的楼层，自动尝试修复中...');
+  } else {
+    console.log('🎉 所有楼层地图生成正常!');
+  }
+  return {ok: totalOk, fail: totalFail};
+};
+
+/* ===== 一键遍历所有楼层（实际进入游戏切换） ===== */
+window.quickTravelAllFloors = function() {
+  if (gs !== 'playing' || !cMap) {
+    console.warn('请先开始游戏！');
+    return;
+  }
+  var targetFloor = 1;
+  var startTime = Date.now();
+  console.log('开始快速遍历楼层...');
+  
+  // 暂停游戏循环，避免寻路计算导致卡顿
+  var wasPaused = gs_paused;
+  gs_paused = true;
+  
+  function travelNext() {
+    if (targetFloor > MAX_F) {
+      gs_paused = wasPaused;
+      var elapsed = Date.now() - startTime;
+      console.log('🎉 所有楼层遍历完成！耗时 ' + elapsed + 'ms');
+      return;
+    }
+    try {
+      console.log('--- 正在生成第 '+targetFloor+' 层 ['+MAP_NAMES[getMapStyle(targetFloor)]+'] ---');
+      initFl(targetFloor);
+      if (!cMap || !cMap.tiles || !cMap.rooms) {
+        console.error('❌ 第 '+targetFloor+' 层: cMap 无效!');
+        targetFloor++;
+        setTimeout(travelNext, 200);
+        return;
+      }
+      if (cMap.sr && typeof cMap.sr.cx === 'number') {
+        P.x = cMap.sr.cx * T;
+        P.y = cMap.sr.cy * T;
+      }
+      console.log('  ✅ 第 '+targetFloor+' 层 OK, 房间='+cMap.rooms.length+' 怪物='+(mons?mons.length:0));
+      targetFloor++;
+      setTimeout(travelNext, 300);
+    } catch(e) {
+      console.error('❌ 第 '+targetFloor+' 层 崩溃: '+e.message);
+      console.error(e.stack);
+      targetFloor++;
+      setTimeout(travelNext, 300);
+    }
+  }
+  travelNext();
+};
 </script>
 </body>
 </html>
